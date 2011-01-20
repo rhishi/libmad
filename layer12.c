@@ -97,9 +97,8 @@ mad_fixed_t I_sample(struct mad_bitptr *ptr, unsigned int nb)
   /* (to be performed by caller) */
 }
 
-/*
- * NAME:	layer->I()
- * DESCRIPTION:	decode a single Layer I frame
+/** Decodes a single Layer I frame -- default choice for
+    decoder_table[0].
  */
 int mad_layer_I(struct mad_stream *stream, struct mad_frame *frame)
 {

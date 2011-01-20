@@ -32,6 +32,7 @@ enum mad_layer {
   MAD_LAYER_III = 3			/* Layer III */
 };
 
+/** Mode -- single channel, dual channel, joint stereo and normal stereo. */
 enum mad_mode {
   MAD_MODE_SINGLE_CHANNEL = 0,		/* single channel */
   MAD_MODE_DUAL_CHANNEL	  = 1,		/* dual channel */
@@ -64,6 +65,7 @@ struct mad_header {
   mad_timer_t duration;			/* audio playing time of frame */
 };
 
+/** Frame --  has header, decoding options, subsamples and overlap. */
 struct mad_frame {
   struct mad_header header;		/* MPEG audio header */
 

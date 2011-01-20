@@ -431,10 +431,9 @@ int mad_header_decode(struct mad_header *header, struct mad_stream *stream)
   return -1;
 }
 
-/*
- * NAME:	frame->decode()
- * DESCRIPTION:	decode a single frame from a bitstream
- */
+/** Decodes a single frame from a bitstream.
+
+    @return 0 if successful, -1 if fail. */
 int mad_frame_decode(struct mad_frame *frame, struct mad_stream *stream)
 {
   frame->options = stream->options;

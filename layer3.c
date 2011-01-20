@@ -19,6 +19,10 @@
  * $Id: layer3.c,v 1.43 2004/01/23 09:41:32 rob Exp $
  */
 
+/** @file layer3.c
+    @brief contains implementation of layer III frame decoding.
+ */
+
 # ifdef HAVE_CONFIG_H
 #  include "config.h"
 # endif
@@ -59,14 +63,7 @@ enum {
   MS_STEREO = 0x2
 };
 
-struct sideinfo {
-  unsigned int main_data_begin;
-  unsigned int private_bits;
-
-  unsigned char scfsi[2];
-
-  struct granule {
-    struct channel {
+struct channel {
       /* from side info */
       unsigned short part2_3_length;
       unsigned short big_values;
@@ -82,29 +79,38 @@ struct sideinfo {
 
       /* from main_data */
       unsigned char scalefac[39];	/* scalefac_l and/or scalefac_s */
-    } ch[2];
-  } gr[2];
 };
 
-/*
- * scalefactor bit lengths
- * derived from section 2.4.2.7 of ISO/IEC 11172-3
- */
-static
-struct {
+struct granule {
+    struct channel ch[2];
+};
+
+/** Side info. */
+struct sideinfo {
+  unsigned int main_data_begin;
+  unsigned int private_bits;
+
+  unsigned char scfsi[2];
+
+  struct granule gr[2];
+};
+
+/** Pair of bitlengths used for sflen_table. */
+struct bitlengthpair {
   unsigned char slen1;
   unsigned char slen2;
-} const sflen_table[16] = {
+};
+
+/** Scalefactor bit lengths derived from section 2.4.2.7 of ISO/IEC 11172-3. */
+static const struct bitlengthpair sflen_table[16] = {
   { 0, 0 }, { 0, 1 }, { 0, 2 }, { 0, 3 },
   { 3, 0 }, { 1, 1 }, { 1, 2 }, { 1, 3 },
   { 2, 1 }, { 2, 2 }, { 2, 3 }, { 3, 1 },
   { 3, 2 }, { 3, 3 }, { 4, 2 }, { 4, 3 }
 };
 
-/*
- * number of LSF scalefactor band values
- * derived from section 2.4.3.2 of ISO/IEC 13818-3
- */
+/** Number of LSF scalefactor band values derived from section 2.4.3.2
+    of ISO/IEC 13818-3. */
 static
 unsigned char const nsfb_table[6][3][4] = {
   { {  6,  5,  5, 5 },
@@ -132,9 +138,8 @@ unsigned char const nsfb_table[6][3][4] = {
     {  6, 18,  9, 0 } }
 };
 
-/*
- * MPEG-1 scalefactor band widths
- * derived from Table B.8 of ISO/IEC 11172-3
+/** MPEG-1 scalefactor band widths derived from Table B.8 of ISO/IEC
+    11172-3.
  */
 static
 unsigned char const sfb_48000_long[] = {
@@ -288,8 +293,8 @@ unsigned char const sfb_8000_short[] = {
 # define sfb_12000_mixed  sfb_16000_mixed
 # define sfb_11025_mixed  sfb_12000_mixed
 
-/* the 8000 Hz short block scalefactor bands do not break after
-   the first 36 frequency lines, so this is probably wrong */
+/** the 8000 Hz short block scalefactor bands do not break after the
+    first 36 frequency lines, so this is probably wrong. */
 static
 unsigned char const sfb_8000_mixed[] = {
   /* long */  12, 12, 12,
@@ -298,12 +303,13 @@ unsigned char const sfb_8000_mixed[] = {
                2,  2,  2,  2,  2,  2,  2,  2,  2, 26, 26, 26
 };
 
-static
-struct {
+struct sfbwidth {
   unsigned char const *l;
   unsigned char const *s;
   unsigned char const *m;
-} const sfbwidth_table[9] = {
+};
+
+static const struct sfbwidth sfbwidth_table[9] = {
   { sfb_48000_long, sfb_48000_short, sfb_48000_mixed },
   { sfb_44100_long, sfb_44100_short, sfb_44100_mixed },
   { sfb_32000_long, sfb_32000_short, sfb_32000_mixed },
@@ -315,31 +321,30 @@ struct {
   {  sfb_8000_long,  sfb_8000_short,  sfb_8000_mixed }
 };
 
-/*
- * scalefactor band preemphasis (used only when preflag is set)
- * derived from Table B.6 of ISO/IEC 11172-3
+/** scalefactor band preemphasis (used only when preflag is set)
+ * derived from Table B.6 of ISO/IEC 11172-3.
  */
 static
 unsigned char const pretab[22] = {
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 3, 2, 0
 };
 
-/*
- * table for requantization
- *
- * rq_table[x].mantissa * 2^(rq_table[x].exponent) = x^(4/3)
- */
-static
+/** Floating point representation used for requantization table. */
 struct fixedfloat {
   unsigned long mantissa  : 27;
   unsigned short exponent :  5;
-} const rq_table[8207] = {
+};
+
+/** Requantization table.
+ *
+ * rq_table[x].mantissa * 2^(rq_table[x].exponent) = x^(4/3)
+ */
+static const struct fixedfloat rq_table[8207] = {
 # include "rq_table.dat"
 };
 
-/*
- * fractional powers of two
- * used for requantization and joint stereo decoding
+/** Fractional powers of two used for requantization and joint stereo
+ * decoding.
  *
  * root_table[3 + x] = 2^(x/4)
  */
@@ -354,9 +359,7 @@ mad_fixed_t const root_table[7] = {
   MAD_F(0x1ae89f99) /* 2^(+3/4) == 1.68179283050743 */
 };
 
-/*
- * coefficients for aliasing reduction
- * derived from Table B.9 of ISO/IEC 11172-3
+/** Coefficients for aliasing reduction derived from Table B.9 of ISO/IEC 11172-3.
  *
  *  c[]  = { -0.6, -0.535, -0.33, -0.185, -0.095, -0.041, -0.0142, -0.0037 }
  * cs[i] =    1 / sqrt(1 + c[i]^2)
@@ -370,6 +373,12 @@ mad_fixed_t const cs[8] = {
   +MAD_F(0x0fff964c) /* +0.999899195 */, +MAD_F(0x0ffff8d3) /* +0.999993155 */
 };
 
+/** Coefficients for aliasing reduction derived from Table B.9 of ISO/IEC 11172-3.
+ *
+ *  c[]  = { -0.6, -0.535, -0.33, -0.185, -0.095, -0.041, -0.0142, -0.0037 }
+ * cs[i] =    1 / sqrt(1 + c[i]^2)
+ * ca[i] = c[i] / sqrt(1 + c[i]^2)
+ */
 static
 mad_fixed_t const ca[8] = {
   -MAD_F(0x083b5fe7) /* -0.514495755 */, -MAD_F(0x078c36d2) /* -0.471731969 */,
@@ -378,9 +387,7 @@ mad_fixed_t const ca[8] = {
   -MAD_F(0x003a2847) /* -0.014198569 */, -MAD_F(0x000f27b4) /* -0.003699975 */
 };
 
-/*
- * IMDCT coefficients for short blocks
- * derived from section 2.4.3.4.10.2 of ISO/IEC 11172-3
+/** IMDCT coefficients for short blocks derived from section 2.4.3.4.10.2 of ISO/IEC 11172-3
  *
  * imdct_s[i/even][k] = cos((PI / 24) * (2 *       (i / 2) + 7) * (2 * k + 1))
  * imdct_s[i /odd][k] = cos((PI / 24) * (2 * (6 + (i-1)/2) + 7) * (2 * k + 1))
@@ -422,9 +429,8 @@ mad_fixed_t const window_l[36] = {
 };
 # endif  /* ASO_IMDCT */
 
-/*
- * windowing coefficients for short blocks
- * derived from section 2.4.3.4.10.3 of ISO/IEC 11172-3
+/** Windowing coefficients for short blocks derived from section
+ * 2.4.3.4.10.3 of ISO/IEC 11172-3.
  *
  * window_s[i] = sin((PI / 12) * (i + 1/2))
  */
@@ -438,9 +444,8 @@ mad_fixed_t const window_s[12] = {
   MAD_F(0x061f78aa) /* 0.382683432 */, MAD_F(0x0216a2a2) /* 0.130526192 */,
 };
 
-/*
- * coefficients for intensity stereo processing
- * derived from section 2.4.3.4.9.3 of ISO/IEC 11172-3
+/** Coefficients for intensity stereo processing derived from section
+ * 2.4.3.4.9.3 of ISO/IEC 11172-3.
  *
  * is_ratio[i] = tan(i * (PI / 12))
  * is_table[i] = is_ratio[i] / (1 + is_ratio[i])
@@ -456,9 +461,8 @@ mad_fixed_t const is_table[7] = {
   MAD_F(0x10000000) /* 1.000000000 */
 };
 
-/*
- * coefficients for LSF intensity stereo processing
- * derived from section 2.4.3.2 of ISO/IEC 13818-3
+/** Coefficients for LSF intensity stereo processing derived from
+ * section 2.4.3.2 of ISO/IEC 13818-3.
  *
  * is_lsf_table[0][i] = (1 / sqrt(sqrt(2)))^(i + 1)
  * is_lsf_table[1][i] = (1 /      sqrt(2)) ^(i + 1)
@@ -500,10 +504,7 @@ mad_fixed_t const is_lsf_table[2][15] = {
   }
 };
 
-/*
- * NAME:	III_sideinfo()
- * DESCRIPTION:	decode frame side information from a bitstream
- */
+/** Decode frame side information from a bitstream. */
 static
 enum mad_error III_sideinfo(struct mad_bitptr *ptr, unsigned int nch,
 			    int lsf, struct sideinfo *si,
@@ -591,10 +592,7 @@ enum mad_error III_sideinfo(struct mad_bitptr *ptr, unsigned int nch,
   return result;
 }
 
-/*
- * NAME:	III_scalefactors_lsf()
- * DESCRIPTION:	decode channel scalefactors for LSF from a bitstream
- */
+/** Decode channel scalefactors for LSF from a bitstream. */
 static
 unsigned int III_scalefactors_lsf(struct mad_bitptr *ptr,
 				  struct channel *channel,
@@ -706,10 +704,7 @@ unsigned int III_scalefactors_lsf(struct mad_bitptr *ptr,
   return mad_bit_length(&start, ptr);
 }
 
-/*
- * NAME:	III_scalefactors()
- * DESCRIPTION:	decode channel scalefactors of one granule from a bitstream
- */
+/** Decode channel scalefactors of one granule from a bitstream. */
 static
 unsigned int III_scalefactors(struct mad_bitptr *ptr, struct channel *channel,
 			      struct channel const *gr0ch, unsigned int scfsi)
@@ -782,8 +777,7 @@ unsigned int III_scalefactors(struct mad_bitptr *ptr, struct channel *channel,
   return mad_bit_length(&start, ptr);
 }
 
-/*
- * The Layer III formula for requantization and scaling is defined by
+/** The Layer III formula for requantization and scaling is defined by
  * section 2.4.3.4.7.1 of ISO/IEC 11172-3, as follows:
  *
  *   long blocks:
@@ -804,10 +798,7 @@ unsigned int III_scalefactors(struct mad_bitptr *ptr, struct channel *channel,
  * calculation.
  */
 
-/*
- * NAME:	III_exponents()
- * DESCRIPTION:	calculate scalefactor exponents
- */
+/** Calculate scalefactor exponents. */
 static
 void III_exponents(struct channel const *channel,
 		   unsigned char const *sfbwidth, signed int exponents[39])
@@ -1533,12 +1524,16 @@ enum mad_error III_stereo(mad_fixed_t xr[2][576],
   return MAD_ERROR_NONE;
 }
 
-/*
- * NAME:	III_aliasreduce()
- * DESCRIPTION:	perform frequency line alias reduction
- */
-static
-void III_aliasreduce(mad_fixed_t xr[576], int lines)
+/** Antialias, i.e. alias reduction of frequency lines.  Input is an
+    array of lines, and number of lines (maximum 576).
+
+    Computation: divide the lines in blocks of 18.  Do 8 butterflies
+    on every pair of adjacent blocks in a mirrored fashion,
+    i.e. xr[-1-i] butterflies with xr[i], where xr points to first
+    element of second block in a pair.  Tweedle factors are in arrays
+    cs, ca.
+  */
+static void III_aliasreduce(mad_fixed_t xr[576], int lines)
 {
   mad_fixed_t const *bound;
   int i;
@@ -1572,10 +1567,9 @@ void III_aliasreduce(mad_fixed_t xr[576], int lines)
   }
 }
 
-# if defined(ASO_IMDCT)
-void III_imdct_l(mad_fixed_t const [18], mad_fixed_t [36], unsigned int);
-# else
-#  if 1
+/** Fast 9-point SDCT.  Input is array of size 9.  Output is array of
+    size 18, but only 9 positions are used (those with even
+    indices). */
 static
 void fastsdct(mad_fixed_t const x[9], mad_fixed_t y[18])
 {
@@ -1689,6 +1683,7 @@ void sdctII(mad_fixed_t const x[18], mad_fixed_t X[18])
   }
 }
 
+/** 18-point, type IV DCT. */
 static inline
 void dctIV(mad_fixed_t const y[18], mad_fixed_t X[18])
 {
@@ -1729,12 +1724,12 @@ void dctIV(mad_fixed_t const y[18], mad_fixed_t X[18])
   X[17] = X[17] / 2 - X[16];
 }
 
-/*
- * NAME:	imdct36
- * DESCRIPTION:	perform X[18]->x[36] IMDCT using Szu-Wei Lee's fast algorithm
- */
+/** Performs IMDCT on 18 input samples to produce 36 output samples
+    using Szu-Wei Lee's fast algorithm.  First we do 18-point DCT type
+    IV.  And then we convert its 18-point output to 36-point output of
+    IMDCT. */
 static inline
-void imdct36(mad_fixed_t const x[18], mad_fixed_t y[36])
+void imdct36_SzuWeiLee(mad_fixed_t const x[18], mad_fixed_t y[36])
 {
   mad_fixed_t tmp[18];
   int i;
@@ -1761,13 +1756,11 @@ void imdct36(mad_fixed_t const x[18], mad_fixed_t y[36])
     y[i + 2] = -tmp[(i + 2) - 27];
   }
 }
-#  else
-/*
- * NAME:	imdct36
- * DESCRIPTION:	perform X[18]->x[36] IMDCT
- */
+
+/** IMDCT from 18 input samples to 36 output samples using just direct
+    computation in a single function. */
 static inline
-void imdct36(mad_fixed_t const X[18], mad_fixed_t x[36])
+void imdct36_2(mad_fixed_t const X[18], mad_fixed_t x[36])
 {
   mad_fixed_t t0, t1, t2,  t3,  t4,  t5,  t6,  t7;
   mad_fixed_t t8, t9, t10, t11, t12, t13, t14, t15;
@@ -2052,15 +2045,13 @@ void imdct36(mad_fixed_t const X[18], mad_fixed_t x[36])
 
   x[26] = x[27] = MAD_F_MLZ(hi, lo) + t5;
 }
-#  endif
 
-/*
- * NAME:	III_imdct_l()
- * DESCRIPTION:	perform IMDCT and windowing for long blocks
- */
+
+/** IMDCT and windowing of a long block of a layer III frame.  X is
+    input, z is output.  X has 18 elements.  z has 36 elements. */
 static
-void III_imdct_l(mad_fixed_t const X[18], mad_fixed_t z[36],
-		 unsigned int block_type)
+void III_imdct_l_non_ASO(mad_fixed_t const X[18], mad_fixed_t z[36],
+                         unsigned int block_type)
 {
   unsigned int i;
 
@@ -2139,12 +2130,45 @@ void III_imdct_l(mad_fixed_t const X[18], mad_fixed_t z[36],
     break;
   }
 }
-# endif  /* ASO_IMDCT */
 
-/*
- * NAME:	III_imdct_s()
- * DESCRIPTION:	perform IMDCT and windowing for short blocks
- */
+# if defined(ASO_IMDCT)
+void III_imdct_l(mad_fixed_t const [18], mad_fixed_t [36], unsigned int);
+# else
+
+#  if 1
+
+/** Performs IMDCT on 18 input samples to produce 36 output samples
+    using Szu-Wei Lee's fast algorithm. */
+static inline
+void imdct36(mad_fixed_t const x[18], mad_fixed_t y[36])
+{
+  imdct36_SzuWeiLee(x, y);
+}
+
+#  else // if defined ASO_IMDCT
+
+/** Performs IMDCT on 18 input samples to produce 36 output samples
+    using imdct36_2. */
+static inline
+void imdct36(mad_fixed_t const x[18], mad_fixed_t y[36])
+{
+  imdct36_2(x, y);
+}
+
+#  endif // #if 1
+
+static
+void III_imdct_l(mad_fixed_t const X[18], mad_fixed_t z[36],
+                         unsigned int block_type)
+{
+  III_imdct_l_non_ASO(X, z, block_type);
+}
+
+# endif  /* not defined ASO_IMDCT */
+
+
+/** IMDCT and windowing of a short block of a layer III frame.  X is
+    input, z is output.  X has 18 elements.  z has 36 elements. */
 static
 void III_imdct_s(mad_fixed_t const X[18], mad_fixed_t z[36])
 {
@@ -2220,10 +2244,7 @@ void III_imdct_s(mad_fixed_t const X[18], mad_fixed_t z[36])
   }
 }
 
-/*
- * NAME:	III_overlap()
- * DESCRIPTION:	perform overlap-add of windowed IMDCT outputs
- */
+/** Performs overlap-add of windowed IMDCT outputs. */
 static
 void III_overlap(mad_fixed_t const output[36], mad_fixed_t overlap[18],
 		 mad_fixed_t sample[18][32], unsigned int sb)
@@ -2268,10 +2289,7 @@ void III_overlap(mad_fixed_t const output[36], mad_fixed_t overlap[18],
 # endif
 }
 
-/*
- * NAME:	III_overlap_z()
- * DESCRIPTION:	perform "overlap-add" of zero IMDCT outputs
- */
+/** Performs "overlap-add" of zero IMDCT outputs. */
 static inline
 void III_overlap_z(mad_fixed_t overlap[18],
 		   mad_fixed_t sample[18][32], unsigned int sb)
@@ -2308,10 +2326,7 @@ void III_overlap_z(mad_fixed_t overlap[18],
 # endif
 }
 
-/*
- * NAME:	III_freqinver()
- * DESCRIPTION:	perform subband frequency inversion for odd sample lines
- */
+/** Subband frequency inversion for odd sample lines. */
 static
 void III_freqinver(mad_fixed_t sample[18][32], unsigned int sb)
 {
@@ -2342,10 +2357,7 @@ void III_freqinver(mad_fixed_t sample[18][32], unsigned int sb)
 # endif
 }
 
-/*
- * NAME:	III_decode()
- * DESCRIPTION:	decode frame main_data
- */
+/** Decodes main data inside a layer III frame. */
 static
 enum mad_error III_decode(struct mad_bitptr *ptr, struct mad_frame *frame,
 			  struct sideinfo *si, unsigned int nch)
@@ -2509,9 +2521,7 @@ enum mad_error III_decode(struct mad_bitptr *ptr, struct mad_frame *frame,
   return MAD_ERROR_NONE;
 }
 
-/*
- * NAME:	layer->III()
- * DESCRIPTION:	decode a single Layer III frame
+/** Decodes a single Layer III frame -- default choice for decoder_table[2]
  */
 int mad_layer_III(struct mad_stream *stream, struct mad_frame *frame)
 {
@@ -2696,3 +2706,4 @@ int mad_layer_III(struct mad_stream *stream, struct mad_frame *frame)
 
   return result;
 }
+
